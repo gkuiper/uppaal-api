@@ -7,5 +7,5 @@ env:
     - secure: "XdOAQd/GuozEDC6+zhALLPvtEdvst2IA2lFpN6Xnc77JNuDZTz5jEAqrsvc7Rg4mVUCtJiOY6hdLyo09bxqRa+AfK1Jq4qU0165HRufLAdk3PiTbxBK4wNn1mQXgUr6r+4NMMs0fC8K7zWKGTfcaa/+nFCB4to6soSE0Uco5Xo2gUK8aqz7a97SlnLwUH+loX4S/zn37snq+5bkkPK+1whcZfkBQXoudIhxOiPhHZaoz5tXKLuxzTCeZp6cLtWP2hAuvfuahCyFISrOv0yT+56pZ44YCF67Xt8F1WfqUzqdob42JSHRzKx4sFvsRpIpdwgRkm0nHt/BfPRhmiFiWIihaHXNBkB0bCc4eNWbSBvbWG+SQsvfvZNXJ61x2OhVHmr7EVQUFFsbtacBQGNyvBe9bpWG24BrNm1Zq5onM4nHd+Jb8sUAuDaNE0sYoCLCtx6uW2MhBVdi9uv6Y7EBhhjZMN5+r0vJCJ2llCehi+qUP9jrGk3rkCw4M/4wogoV5SIGiQmf7VTZsdTol1GoaDRpnJcBVxFlnDR8gyPEqxanmjoCCn5SsoGSfIC7fJbkID3JpsT0aX6qvBZg+XFXyntbEprVKwNCTMb4WPKF5igUVOl4FowD9Dhw1u2pdENoDarJ1vD/H4kAa6UXcfRk1/oILnFtBfmNtmToNYM/TIkM="
 
 before_install:
-  - ln -sf settings.xml ~/.m2/settings.xml 
+    - cp -f settings.xml ~/.m2/settings.xml 
 
