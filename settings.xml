@@ -4,12 +4,12 @@
   <servers>
     <server>
       <username>${env.CI_DEPLOY_USERNAME}</username>
-      <password>${env.CI_DEPLOY_PASSWORD</password>
+      <password>${env.CI_DEPLOY_PASSWORD}</password>
       <id>central</id>
     </server>
     <server>
       <username>${env.CI_DEPLOY_USERNAME}</username>
-      <password>${env.CI_DEPLOY_PASSWORD</password>
+      <password>${env.CI_DEPLOY_PASSWORD}</password>
       <id>snapshots</id>
     </server>
   </servers>
