@@ -1,0 +1,902 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE nta PUBLIC '-//Uppaal Team//DTD Flat System 1.1//EN' 'http://www.it.uu.se/research/group/darts/uppaal/flat-1_2.dtd'>
+<nta>
+    <declaration>
+const int NRTASK = 8; // number of tasks
+const int NEDGES = 18;
+const int NRRES = 4; // number of cpu resources
+const int MAX_TOKENS = 10;
+const int MIN_TOKENS = -MAX_TOKENS;
+const int NSOURCES = 1;
+
+typedef int[1, NRTASK] task_t;
+typedef int[0, NRTASK] tasks_t;
+typedef int[1, NEDGES] edges_t;
+typedef int[1, NSOURCES] edge_s_t;
+typedef int[1, NRRES] res_t;
+typedef int[0, NRRES] ress_t;
+typedef int[1, NSOURCES] source_t;
+typedef int[0, NSOURCES] sources_t;
+typedef int[MIN_TOKENS, MAX_TOKENS] token_t;
+
+/** Scheduler messages: */
+broadcast chan release[ress_t][task_t];
+urgent broadcast chan request[ress_t][task_t];
+urgent broadcast chan grant[ress_t][task_t], preempt[task_t];
+
+broadcast chan source_prod[source_t];
+
+urgent chan hurry;
+
+bool runs[task_t]; // controls if the task is currently executed on CPU
+
+bool error = false;
+
+bool requested[task_t];
+int  source[source_t];
+bool granted[task_t];
+
+clock c[task_t];
+
+typedef struct {
+  int P;
+  int J;
+} source_const_t;
+
+const int WCET[task_t] = { 3, 4, 2, 1, 1, 1, 4, 2 };
+const int BCET[task_t] = { 1, 4, 2, 1, 1, 1, 4, 2 };
+const res_t  R[task_t] = { 1, 2, 2, 3, 3, 3, 4, 3 }; // resources
+const int    P[task_t] = { 1, 2, 1, 1, 2, 3, 1, 4 }; // task priorities
+
+const int Rmax[task_t] = { 3, 4, 2, 1, 1, 1, 4, 2 }; // fixme
+
+const source_const_t source_const[source_t] = {
+{ 10, 5 }
+};
+
+int B[task_t] = BCET;
+int W[task_t] = WCET;
+
+/** TASK QUEUE */
+typedef tasks_t list_t[tasks_t];
+typedef struct {
+    list_t list;
+    tasks_t len;
+} queue_t;
+
+queue_t q[res_t];
+
+task_t front(queue_t queue){ return queue.list[0]; }
+bool empty(queue_t queue) { return queue.len==0; }
+
+void enqueue(queue_t &amp;queue, task_t id)
+{
+    tasks_t i = 0;
+    tasks_t tid;
+    while (i&lt;queue.len) {
+	    if (P[id] &gt; P[queue.list[i]]) {
+           tid = queue.list[i]; queue.list[i] = id; id = tid;
+        }
+        i++;
+    }
+    queue.list[queue.len] = id;
+    queue.len++;
+}
+
+void dequeue(queue_t &amp;queue, task_t tid)
+{
+    tasks_t i = 0;
+    while (tid!=queue.list[i]) i++;
+    while (i&lt;queue.len) {
+        queue.list[i]=queue.list[i+1];
+        i++;
+    }
+    queue.len--;
+    queue.list[queue.len]=0;
+}
+
+// simple bubble sorter, O(n^2) in general, O(2n) after 1 change
+void sort(queue_t&amp; queue)
+{ 
+    tasks_t i, tmp;
+    int j;
+    for (i=0,j=0; queue.list[i+1]!=0; i++,j=i){        
+        while (j&gt;=0 &amp;&amp; P[queue.list[j+1]]&gt;P[queue.list[j]]) {
+            tmp = queue.list[j]; queue.list[j] = queue.list[j+1]; queue.list[j+1] = tmp;
+            j--;
+        }
+    }
+}
+
+/** EDGES */
+
+typedef struct {
+  task_t from;
+  task_t to;
+  token_t tokens;
+} edge_pc_t;
+
+typedef struct {
+  source_t from;
+  task_t to;
+} edge_s_pc_t;
+
+const edge_pc_t edge_pc[edges_t] = {
+{ 1, 2, 0 },
+{ 2, 1, 2 }, { 2, 8, 0 },
+{ 8, 2, 3 }, { 2, 3, 0 },
+{ 3, 2, 2 }, { 3, 4, 0 },
+{ 4, 3, 2 }, { 4, 5, 0 },
+{ 5, 4, 2 }, { 5, 6, 0 },
+{ 6, 5, 2 }, { 6, 7, 0 },
+{ 7, 6, 2 }, { 7, 8, 0 },
+{ 8, 7, 2 }, { 8, 3, 2 },
+{ 3, 8, 1 }};
+
+const edge_s_pc_t edge_s[edge_s_t] = {
+{ 1, 1 }
+};
+
+// QUEUES for edges
+typedef struct {
+    //bool list[token_t];
+    token_t len;
+} edge_t;
+
+edge_t edges[edges_t];
+edge_t edges_s[edge_s_t];
+
+bool empty_edge(edge_t edge) { return edge.len &lt;=0; }
+
+void produce(edge_t &amp;edge) { edge.len++; }
+
+void consume(edge_t &amp;edge) { edge.len--; }
+
+// place the inital tokens with index starting with 0 until init tokens - 1
+void init_edges()
+{
+  for(e: edges_t) {
+    const int tokens = edge_pc[e].tokens;
+    for(t: token_t){
+        if(tokens >= 0) {
+            if(t &gt;= 0 &amp;&amp; t &lt; tokens){
+                produce(edges[e]);
+            }
+        } else {
+            // negative tokens for syncs
+            if(t &lt;= 0 &amp;&amp; t &gt; tokens){
+                consume(edges[e]);
+            }
+        }
+    }
+  }
+}
+
+bool empty_task(task_t t) {
+  bool ret= false;
+  for(e : edges_t) {
+    if(edge_pc[e].to == t &amp;&amp; empty_edge(edges[e])) { ret=true;}
+  }
+  return ret;
+}
+
+void prod_task(task_t t) {
+  for(e : edges_t){
+    if(edge_pc[e].from == t) {
+      produce(edges[e]);
+    }
+  }
+}
+void cons_task(task_t t) {
+  for(e : edges_t){
+    if(edge_pc[e].to == t) {
+      consume(edges[e]);
+    }
+  }
+}
+
+bool empty_source(task_t t) {
+  bool ret= false;
+  for(e : edge_s_t) {
+    if(edge_s[e].to == t &amp;&amp; empty_edge(edges_s[e])) { ret=true;}
+  }
+  return ret;
+}
+void prod_source(source_t s) {
+  for(e : edge_s_t){
+    if(edge_s[e].from == s) {
+      produce(edges_s[e]);
+    }
+  }
+}
+void cons_source(task_t t) {
+  for(e : edge_s_t){
+    if(edge_s[e].to == t) {
+      consume(edges_s[e]);
+    }
+  }
+}</declaration>
+	<template>
+		<name>Init</name>
+		<location id="id0" x="0" y="93">
+		</location>
+		<location id="id1" x="0" y="0">
+			<committed/>
+		</location>
+		<init ref="id1"/>
+		<transition>
+			<source ref="id1"/>
+			<target ref="id0"/>
+			<label kind="assignment" x="8" y="34">init_edges()</label>
+		</transition>
+	</template>
+	<template>
+		<name>MaxDistance</name>
+		<parameter>const task_t id </parameter>
+		<declaration>clock x;</declaration>
+		<location id="id2" x="-246" y="-8">
+		</location>
+		<location id="id3" x="-340" y="-8">
+		</location>
+		<init ref="id3"/>
+		<transition>
+			<source ref="id3"/>
+			<target ref="id3"/>
+			<label kind="synchronisation" x="-408" y="-76">release[R[id]][id]?</label>
+			<nail x="-357" y="-42"/>
+			<nail x="-323" y="-42"/>
+		</transition>
+		<transition>
+			<source ref="id2"/>
+			<target ref="id3"/>
+			<label kind="synchronisation" x="-357" y="17">release[R[id]][id]?</label>
+			<nail x="-263" y="17"/>
+			<nail x="-323" y="17"/>
+		</transition>
+		<transition>
+			<source ref="id3"/>
+			<target ref="id2"/>
+			<label kind="synchronisation" x="-323" y="-59">release[R[id]][id]?</label>
+			<label kind="assignment" x="-314" y="-42">x = 0</label>
+			<nail x="-314" y="-25"/>
+			<nail x="-272" y="-25"/>
+		</transition>
+	</template>
+	<template>
+		<name>MaxDistance2</name>
+		<parameter>const task_t id </parameter>
+		<declaration>clock x;
+
+int P(){
+  return source_const[1].P;
+}</declaration>
+		<location id="id4" x="68" y="0">
+		</location>
+		<location id="id5" x="-17" y="0">
+			<label kind="invariant" x="-42" y="17">x' == 0</label>
+		</location>
+		<init ref="id5"/>
+		<transition>
+			<source ref="id4"/>
+			<target ref="id4"/>
+			<label kind="synchronisation" x="17" y="-68">release[R[id]][id]?</label>
+			<label kind="assignment" x="51" y="-51">x = 0</label>
+			<nail x="42" y="-51"/>
+			<nail x="102" y="-51"/>
+		</transition>
+		<transition>
+			<source ref="id5"/>
+			<target ref="id4"/>
+			<label kind="synchronisation" x="1" y="-17">release[R[id]][id]?</label>
+		</transition>
+	</template>
+	<template>
+		<name>SourceStaircase</name>
+		<declaration>clock x;
+
+const source_t id = 1;
+
+const int STEPS = 3;
+typedef int[1, STEPS] steps_t;
+
+//const int Bs[steps_t] = {1, 2}; // must be monotomic increasing
+//const int Ws[steps_t] = {12, 13}; // must be monotomic increasing AND B[x] &lt;= W[x]
+
+const int Bs[steps_t] = {0, 10, 20}; // must be monotomic increasing
+const int Ws[steps_t] = {9, 19, 29}; // must be monotomic increasing AND B[x] &lt;= W[x]
+
+steps_t i;
+
+void prod(){
+  prod_source(id);
+}</declaration>
+		<location id="id6" x="0" y="102">
+			<name x="-17" y="119">Done</name>
+			<label kind="invariant" x="-76" y="102">x &lt;= 30</label>
+		</location>
+		<location id="id7" x="0" y="8">
+			<label kind="invariant" x="-85" y="17">x &lt;= Ws[i]</label>
+		</location>
+		<init ref="id7"/>
+		<transition>
+			<source ref="id6"/>
+			<target ref="id7"/>
+			<label kind="guard" x="-119" y="34">x &gt;= 30</label>
+			<label kind="assignment" x="-119" y="51">x = 0, i = 1</label>
+			<nail x="-34" y="68"/>
+			<nail x="-34" y="42"/>
+		</transition>
+		<transition>
+			<source ref="id7"/>
+			<target ref="id7"/>
+			<label kind="guard" x="42" y="-17">x &gt;= Bs[i] &amp;&amp; i &lt; STEPS</label>
+			<label kind="synchronisation" x="42" y="0">source_prod[id]!</label>
+			<label kind="assignment" x="42" y="17">prod(), i++</label>
+			<nail x="34" y="42"/>
+			<nail x="34" y="-17"/>
+		</transition>
+		<transition>
+			<source ref="id7"/>
+			<target ref="id6"/>
+			<label kind="guard" x="8" y="34">x &gt;= Bs[i] &amp;&amp; i == STEPS</label>
+			<label kind="synchronisation" x="8" y="51">source_prod[id]!</label>
+			<label kind="assignment" x="8" y="68">prod()</label>
+		</transition>
+	</template>
+	<template>
+		<name x="5" y="5">Task</name>
+		<parameter>const task_t id</parameter>
+		<declaration>void prod(){
+  prod_task(id);
+}
+
+void cons(){
+  cons_task(id);
+  cons_source(id);
+}
+
+bool dependencies(){
+  return ! (empty_task(id) || empty_source(id));
+}</declaration>
+		<location id="id8" x="-127" y="-34">
+			<name x="-110" y="-59">Running</name>
+			<label kind="invariant" x="-110" y="-34">c[id] &lt;= W[id]</label>
+		</location>
+		<location id="id9" x="-127" y="85">
+			<name x="-119" y="51">Done</name>
+			<committed/>
+		</location>
+		<location id="id10" x="-127" y="-144">
+			<name x="-110" y="-170">Waiting</name>
+		</location>
+		<location id="id11" x="-127" y="-280">
+			<name x="-137" y="-314">Idle</name>
+		</location>
+		<init ref="id11"/>
+		<transition>
+			<source ref="id10"/>
+			<target ref="id8"/>
+			<label kind="synchronisation" x="-119" y="-119">grant[R[id]][id]?</label>
+			<label kind="assignment" x="-119" y="-102">c[id]=0,
+granted[id]=true</label>
+		</transition>
+		<transition>
+			<source ref="id9"/>
+			<target ref="id11"/>
+			<label kind="guard" x="51" y="-153">runs[id]</label>
+			<label kind="synchronisation" x="51" y="-136">release[R[id]][id]!</label>
+			<label kind="assignment" x="51" y="-119">c[id] = 0,
+prod()</label>
+			<nail x="42" y="85"/>
+			<nail x="42" y="-280"/>
+		</transition>
+		<transition>
+			<source ref="id8"/>
+			<target ref="id9"/>
+			<label kind="guard" x="-119" y="-17">runs[id] &amp;&amp;
+c[id]&gt;=B[id]</label>
+			<label kind="assignment" x="-119" y="17">requested[id]=false,
+granted[id]=false</label>
+		</transition>
+		<transition>
+			<source ref="id11"/>
+			<target ref="id10"/>
+			<label kind="guard" x="-119" y="-263">dependencies()</label>
+			<label kind="synchronisation" x="-119" y="-246">request[R[id]][id]!</label>
+			<label kind="assignment" x="-119" y="-229">cons(),
+requested[id]=true,
+granted[id]=false</label>
+		</transition>
+	</template>
+	<template>
+		<name>TaskApprox</name>
+		<parameter>const task_t id</parameter>
+		<declaration>void prod(){
+  prod_task(id);
+}
+
+void cons(){
+  cons_task(id);
+  cons_source(id);
+}
+
+bool dependencies(){
+  return ! (empty_task(id) || empty_source(id));
+}</declaration>
+		<location id="id12" x="-127" y="-136">
+			<name x="-110" y="-161">Running</name>
+			<label kind="invariant" x="-110" y="-127">c[id] &lt;= Rmax[id]</label>
+		</location>
+		<location id="id13" x="-127" y="-280">
+			<name x="-137" y="-314">Idle</name>
+		</location>
+		<init ref="id13"/>
+		<transition>
+			<source ref="id12"/>
+			<target ref="id13"/>
+			<label kind="guard" x="25" y="-238">c[id]&gt;=BCET[id]</label>
+			<label kind="synchronisation" x="25" y="-221">release[R[id]][id]!</label>
+			<label kind="assignment" x="25" y="-204">c[id] = 0,
+prod()</label>
+			<nail x="17" y="-136"/>
+			<nail x="17" y="-280"/>
+		</transition>
+		<transition>
+			<source ref="id13"/>
+			<target ref="id12"/>
+			<label kind="guard" x="-111" y="-263">dependencies()</label>
+			<label kind="synchronisation" x="-110" y="-195">hurry!</label>
+			<label kind="assignment" x="-111" y="-229">cons(),
+c[id]=0</label>
+		</transition>
+	</template>
+	<template>
+		<name>Measure</name>
+		<parameter>const task_t id</parameter>
+		<declaration>clock r;</declaration>
+		<location id="id14" x="0" y="161">
+			<label kind="invariant" x="-10" y="178">r' == 1</label>
+		</location>
+		<location id="id15" x="0" y="0">
+			<label kind="invariant" x="-10" y="17">r' == 0</label>
+		</location>
+		<init ref="id15"/>
+		<transition>
+			<source ref="id14"/>
+			<target ref="id15"/>
+			<label kind="guard" x="-59" y="38">!requested[id]</label>
+			<label kind="synchronisation" x="-59" y="55">hurry!</label>
+			<nail x="-59" y="127"/>
+			<nail x="-59" y="17"/>
+		</transition>
+		<transition>
+			<source ref="id15"/>
+			<target ref="id14"/>
+			<label kind="guard" x="0" y="46">requested[id]</label>
+			<label kind="synchronisation" x="0" y="63">hurry!</label>
+			<label kind="assignment" x="0" y="80">r = 0</label>
+		</transition>
+	</template>
+	<template>
+		<name>Measure2</name>
+		<parameter>const task_t id</parameter>
+		<declaration>clock r;
+
+int n=0, m=-1;</declaration>
+		<location id="id16" x="-297" y="153">
+			<label kind="invariant" x="-289" y="170">r' == 1</label>
+		</location>
+		<location id="id17" x="-297" y="-8">
+			<label kind="invariant" x="-289" y="9">r' == 0</label>
+		</location>
+		<init ref="id17"/>
+		<transition>
+			<source ref="id16"/>
+			<target ref="id16"/>
+			<label kind="synchronisation" x="-348" y="170">request[R[id]][id]?</label>
+			<label kind="assignment" x="-348" y="187">n++</label>
+			<nail x="-357" y="229"/>
+			<nail x="-357" y="153"/>
+		</transition>
+		<transition>
+			<source ref="id16"/>
+			<target ref="id16"/>
+			<label kind="guard" x="-279" y="195">m!=0</label>
+			<label kind="synchronisation" x="-279" y="212">release[R[id]][id]?</label>
+			<label kind="assignment" x="-279" y="229">m=(m&gt;0?m:m-1),n--</label>
+			<nail x="-297" y="229"/>
+			<nail x="-195" y="229"/>
+		</transition>
+		<transition>
+			<source ref="id17"/>
+			<target ref="id17"/>
+			<label kind="synchronisation" x="-297" y="-59">release[R[id]][id]?</label>
+			<label kind="assignment" x="-297" y="-42">n--</label>
+			<nail x="-297" y="-76"/>
+			<nail x="-357" y="-76"/>
+		</transition>
+		<transition>
+			<source ref="id17"/>
+			<target ref="id17"/>
+			<label kind="synchronisation" x="-279" y="-25">request[R[id]][id]?</label>
+			<label kind="assignment" x="-279" y="-8">n++</label>
+			<nail x="-229" y="-8"/>
+			<nail x="-229" y="-76"/>
+		</transition>
+		<transition>
+			<source ref="id16"/>
+			<target ref="id17"/>
+			<label kind="guard" x="-348" y="51">m==0</label>
+			<label kind="synchronisation" x="-348" y="68">release[R[id]][id]?</label>
+			<label kind="assignment" x="-348" y="85">r=0, m=-1, n--</label>
+			<nail x="-356" y="128"/>
+			<nail x="-356" y="26"/>
+		</transition>
+		<transition>
+			<source ref="id17"/>
+			<target ref="id16"/>
+			<label kind="synchronisation" x="-289" y="34">request[R[id]][id]?</label>
+			<label kind="assignment" x="-289" y="51">r=0, m=n, n++</label>
+		</transition>
+	</template>
+	<template>
+		<name>MeasureEnd2End</name>
+		<parameter>const task_t to</parameter>
+		<declaration>clock r;
+
+//const task_t from = 2;
+const source_t from = 1;
+//const task_t to = 6;
+
+int n=0, m=-1;</declaration>
+		<location id="id18" x="76" y="161">
+			<label kind="invariant" x="93" y="153">r' == 1</label>
+		</location>
+		<location id="id19" x="76" y="0">
+			<label kind="invariant" x="85" y="8">r' == 0</label>
+		</location>
+		<init ref="id19"/>
+		<transition>
+			<source ref="id18"/>
+			<target ref="id18"/>
+			<label kind="synchronisation" x="25" y="178">source_prod[from]?</label>
+			<label kind="assignment" x="25" y="195">n++</label>
+			<nail x="17" y="229"/>
+			<nail x="17" y="161"/>
+		</transition>
+		<transition>
+			<source ref="id19"/>
+			<target ref="id19"/>
+			<label kind="synchronisation" x="17" y="-102">release[R[to]][to]?</label>
+			<label kind="assignment" x="17" y="-85">n--</label>
+			<nail x="76" y="-59"/>
+			<nail x="17" y="-59"/>
+		</transition>
+		<transition>
+			<source ref="id18"/>
+			<target ref="id18"/>
+			<label kind="guard" x="76" y="229">m!=0</label>
+			<label kind="synchronisation" x="76" y="246">release[R[to]][to]?</label>
+			<label kind="assignment" x="76" y="263">m=(m&lt;0?m:m-1),n--</label>
+			<nail x="76" y="221"/>
+			<nail x="136" y="221"/>
+		</transition>
+		<transition>
+			<source ref="id19"/>
+			<target ref="id19"/>
+			<label kind="synchronisation" x="144" y="-42">source_prod[from]?</label>
+			<label kind="assignment" x="144" y="-25">n++</label>
+			<nail x="136" y="0"/>
+			<nail x="136" y="-68"/>
+		</transition>
+		<transition>
+			<source ref="id18"/>
+			<target ref="id19"/>
+			<label kind="guard" x="17" y="51">m==0</label>
+			<label kind="synchronisation" x="25" y="102">release[R[to]][to]?</label>
+			<label kind="assignment" x="17" y="85">m=-1, n--</label>
+			<nail x="17" y="136"/>
+			<nail x="17" y="34"/>
+		</transition>
+		<transition>
+			<source ref="id19"/>
+			<target ref="id18"/>
+			<label kind="guard" x="85" y="42">m==-1</label>
+			<label kind="synchronisation" x="85" y="59">source_prod[from]?</label>
+			<label kind="assignment" x="85" y="76">r=0, m=n, n++</label>
+		</transition>
+	</template>
+	<template>
+		<name>Processor</name>
+		<parameter>const res_t CPU</parameter>
+		<declaration>tasks_t task = 0; // current task owning the cpu
+tasks_t new = 0;
+
+void updateBC(task_t t_new){
+  for(t : task_t){
+    if(t!=t_new &amp;&amp; P[t_new]&gt;P[t] &amp;&amp; granted[t] &amp;&amp; R[t] == CPU){
+      B[t]+=BCET[t_new];
+      W[t]+=WCET[t_new];
+    }
+  }
+}
+
+void start(task_t t){
+  if(!granted[t]){
+    B[t]=BCET[t];
+    W[t]=WCET[t];
+  }
+}</declaration>
+		<location id="id20" x="-119" y="17">
+			<committed/>
+		</location>
+		<location id="id21" x="204" y="17">
+			<committed/>
+		</location>
+		<location id="id22" x="-119" y="136">
+			<committed/>
+		</location>
+		<location id="id23" x="51" y="136">
+			<name x="59" y="102">Occupied</name>
+		</location>
+		<location id="id24" x="51" y="17">
+			<committed/>
+		</location>
+		<location id="id25" x="51" y="-110">
+			<name x="41" y="-144">Free</name>
+		</location>
+		<init ref="id25"/>
+		<transition>
+			<source ref="id22"/>
+			<target ref="id20"/>
+			<label kind="guard" x="-246" y="68">c[task] &lt; W[task]</label>
+			<label kind="assignment" x="-245" y="85">updateBC(new)</label>
+		</transition>
+		<transition>
+			<source ref="id22"/>
+			<target ref="id23"/>
+			<label kind="guard" x="-85" y="195">c[task] &gt;= W[task]</label>
+			<nail x="-119" y="212"/>
+			<nail x="51" y="212"/>
+		</transition>
+		<transition>
+			<source ref="id20"/>
+			<target ref="id23"/>
+			<label kind="guard" x="-119" y="76">P[front(q[CPU])]&lt;=P[task]</label>
+		</transition>
+		<transition>
+			<source ref="id20"/>
+			<target ref="id24"/>
+			<label kind="guard" x="-111" y="0">P[front(q[CPU])]&gt;P[task]</label>
+			<label kind="synchronisation" x="-110" y="-17">preempt[task]!</label>
+			<label kind="assignment" x="-110" y="17">runs[task]=false,
+task=front(q[CPU]),
+start(task)</label>
+		</transition>
+		<transition>
+			<source ref="id23"/>
+			<target ref="id22"/>
+			<label kind="select" x="-85" y="102">t:task_t</label>
+			<label kind="synchronisation" x="-85" y="119">request[CPU][t]?</label>
+			<label kind="assignment" x="-85" y="136">enqueue(q[CPU],t),
+new = t</label>
+		</transition>
+		<transition>
+			<source ref="id21"/>
+			<target ref="id25"/>
+			<label kind="guard" x="102" y="-127">empty(q[CPU])</label>
+			<label kind="assignment" x="102" y="-110">task = 0</label>
+			<nail x="204" y="-110"/>
+		</transition>
+		<transition>
+			<source ref="id21"/>
+			<target ref="id24"/>
+			<label kind="guard" x="85" y="0">!empty(q[CPU])</label>
+			<label kind="assignment" x="85" y="17">task=front(q[CPU]),
+start(task)</label>
+		</transition>
+		<transition>
+			<source ref="id23"/>
+			<target ref="id21"/>
+			<label kind="select" x="212" y="59">t:task_t</label>
+			<label kind="synchronisation" x="69" y="119">release[CPU][t]?</label>
+			<label kind="assignment" x="212" y="93">runs[t]=false,
+dequeue(q[CPU],t)</label>
+			<nail x="204" y="136"/>
+		</transition>
+		<transition>
+			<source ref="id24"/>
+			<target ref="id23"/>
+			<label kind="synchronisation" x="59" y="59">grant[CPU][task]!</label>
+			<label kind="assignment" x="59" y="76">runs[task]=true</label>
+		</transition>
+		<transition>
+			<source ref="id25"/>
+			<target ref="id24"/>
+			<label kind="select" x="59" y="-85">t:task_t</label>
+			<label kind="synchronisation" x="59" y="-68">request[CPU][t]?</label>
+			<label kind="assignment" x="59" y="-51">enqueue(q[CPU],t),
+task=front(q[CPU]),
+start(t)</label>
+		</transition>
+	</template>
+	<template>
+		<name>Hurry</name>
+		<location id="id26" x="0" y="0">
+		</location>
+		<init ref="id26"/>
+		<transition>
+			<source ref="id26"/>
+			<target ref="id26"/>
+			<label kind="synchronisation" x="68" y="-8">hurry?</label>
+			<nail x="51" y="-51"/>
+			<nail x="51" y="59"/>
+		</transition>
+	</template>
+	<template>
+		<name>Source</name>
+		<parameter>const source_t id</parameter>
+		<declaration>clock x;
+
+int P(){
+  return source_const[id].P;
+}
+
+int J(){
+  return source_const[id].J;
+}
+
+void prod(){
+  prod_source(id);
+}</declaration>
+		<location id="id27" x="-493" y="-195">
+			<label kind="invariant" x="-503" y="-178">x &lt;= P()</label>
+		</location>
+		<location id="id28" x="-654" y="-195">
+			<label kind="invariant" x="-664" y="-178">x &lt;= J()</label>
+		</location>
+		<location id="id29" x="-739" y="-195">
+			<label kind="invariant" x="-749" y="-178">x &lt;= P()</label>
+		</location>
+		<init ref="id29"/>
+		<transition>
+			<source ref="id27"/>
+			<target ref="id28"/>
+			<label kind="guard" x="-629" y="-280">x &gt;= P()</label>
+			<label kind="assignment" x="-629" y="-263">x = 0</label>
+			<nail x="-527" y="-238"/>
+			<nail x="-629" y="-238"/>
+		</transition>
+		<transition>
+			<source ref="id28"/>
+			<target ref="id27"/>
+			<label kind="synchronisation" x="-636" y="-212">source_prod[id]!</label>
+			<label kind="assignment" x="-636" y="-195">prod()</label>
+		</transition>
+		<transition>
+			<source ref="id29"/>
+			<target ref="id28"/>
+			<label kind="assignment" x="-721" y="-195">x = 0</label>
+		</transition>
+	</template>
+	<template>
+		<name>SourceBurst</name>
+		<parameter>const source_t id</parameter>
+		<declaration>clock x, y;
+
+//int [0, J/P+1]pending = 0;
+//int [0, J/P+1]snd = 0;
+
+
+
+int P(){
+  return source_const[id].P;
+}
+
+int J(){
+  return source_const[id].J;
+}
+
+void prod(){
+  prod_source(id);
+}
+
+int [0,J()/P()+1] pending=0, snd=0;</declaration>
+		<location id="id30" x="-34" y="119">
+			<label kind="invariant" x="-170" y="85">x &lt;= P() &amp;&amp; y &lt;= P()</label>
+		</location>
+		<location id="id31" x="-34" y="-34">
+			<label kind="invariant" x="-170" y="-17">x &lt;= P() &amp;&amp; y &lt;= J()</label>
+		</location>
+		<location id="id32" x="-34" y="-195">
+			<urgent/>
+		</location>
+		<init ref="id32"/>
+		<transition>
+			<source ref="id30"/>
+			<target ref="id30"/>
+			<label kind="guard" x="-85" y="195">y == P() &amp;&amp; snd&gt;0</label>
+			<label kind="assignment" x="-85" y="212">snd--, y=0</label>
+			<nail x="-34" y="187"/>
+			<nail x="-85" y="187"/>
+		</transition>
+		<transition>
+			<source ref="id30"/>
+			<target ref="id30"/>
+			<label kind="guard" x="59" y="110">pending&gt;0</label>
+			<label kind="synchronisation" x="59" y="161">source_prod[id]!</label>
+			<label kind="assignment" x="59" y="127">pending--, snd++,
+prod()</label>
+			<nail x="51" y="119"/>
+			<nail x="51" y="170"/>
+		</transition>
+		<transition>
+			<source ref="id30"/>
+			<target ref="id30"/>
+			<label kind="guard" x="0" y="34">x==P()</label>
+			<label kind="assignment" x="0" y="51">pending++, x=0</label>
+			<nail x="8" y="76"/>
+			<nail x="59" y="76"/>
+		</transition>
+		<transition>
+			<source ref="id31"/>
+			<target ref="id31"/>
+			<label kind="guard" x="59" y="-51">pending&gt;0</label>
+			<label kind="synchronisation" x="59" y="0">source_prod[id]!</label>
+			<label kind="assignment" x="59" y="-34">pending--, snd++,
+prod()</label>
+			<nail x="51" y="-34"/>
+			<nail x="51" y="8"/>
+		</transition>
+		<transition>
+			<source ref="id31"/>
+			<target ref="id31"/>
+			<label kind="guard" x="8" y="-136">x==P()</label>
+			<label kind="assignment" x="8" y="-119">pending++, x=0</label>
+			<nail x="8" y="-93"/>
+			<nail x="51" y="-93"/>
+		</transition>
+		<transition>
+			<source ref="id31"/>
+			<target ref="id30"/>
+			<label kind="guard" x="-153" y="8">y==J() &amp;&amp; snd&gt;0</label>
+			<label kind="assignment" x="-119" y="25">snd--, y=0</label>
+		</transition>
+		<transition>
+			<source ref="id32"/>
+			<target ref="id31"/>
+			<label kind="assignment" x="-119" y="-170">pending++</label>
+		</transition>
+	</template>
+	<system>// Place template instantiations here.
+//Process = Task();
+
+P1 = Processor(1);
+P2 = Processor(2);
+P3 = Processor(3);
+P4 = Processor(4);
+
+// Choose between Task(id) and TaskApprox(id) implementation
+
+T1 = Task(1);
+T2 = Task(2);
+T3 = Task(3);
+T4 = Task(4);
+T5 = Task(5);
+T6 = Task(6);
+T7 = Task(7);
+T8 = Task(8);
+
+M1 = MeasureEnd2End(8);
+
+system T1, T2, T3, T4, T5, T6, T7, T8, P1, P2, P3, P4, SourceBurst, M1, Init, Hurry;
+</system>
+	<queries>
+		<query>
+			<formula>sup: M1.r
+			</formula>
+			<comment>
+			</comment>
+		</query>
+	</queries>
+</nta>
