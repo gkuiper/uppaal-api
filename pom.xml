@@ -55,7 +55,7 @@
     <snapshotRepository>
         <id>snapshots</id>
         <name>f4598c7a1527-snapshots</name>
-        <url>http://utwks60181.ad.utwente.nl:8081/artifactory/libs-snapshot-local</url>
+        <url>${deployUrl}</url>
     </snapshotRepository>
   </distributionManagement>
 </project>

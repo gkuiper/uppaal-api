@@ -47,6 +47,7 @@
           <url>http://${env.CI_DEPLOY_HOST}:8081/artifactory/libs-release</url>
         </pluginRepository>
       </pluginRepositories>
+      <properties><deployUrl>http://${env.CI_DEPLOY_HOST}:8081/artifactory/libs-snapshot-local</deployUrl></properties>
       <id>artifactory</id>
     </profile>
   </profiles>
