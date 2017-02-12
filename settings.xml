@@ -5,7 +5,7 @@
     <server>
       <username>${env.CI_DEPLOY_USERNAME}</username>
       <password>${env.CI_DEPLOY_PASSWORD}</password>
-      <id>central</id>
+      <id>central-local</id>
     </server>
     <server>
       <username>${env.CI_DEPLOY_USERNAME}</username>
@@ -16,11 +16,21 @@
   <profiles>
     <profile>
       <repositories>
+		<repository>
+			<id>central</id>
+			<url>http://repo1.maven.org/maven2</url>
+			<releases>
+				<enabled>true</enabled>
+			</releases>
+			<snapshots>
+				<enabled>false</enabled>
+			</snapshots>
+		</repository>
         <repository>
           <snapshots>
             <enabled>false</enabled>
           </snapshots>
-          <id>central</id>
+          <id>central-local</id>
           <name>libs-release</name>
           <url>http://${env.CI_DEPLOY_HOST}:8081/artifactory/libs-release</url>
         </repository>
@@ -33,10 +43,20 @@
       </repositories>
       <pluginRepositories>
         <pluginRepository>
+			<id>central</id>
+			<url>http://repo1.maven.org/maven2</url>
+			<releases>
+				<enabled>true</enabled>
+			</releases>
+			<snapshots>
+				<enabled>false</enabled>
+			</snapshots>
+        </pluginRepository>
+        <pluginRepository>
           <snapshots>
             <enabled>false</enabled>
           </snapshots>
-          <id>central</id>
+          <id>central-local</id>
           <name>libs-release</name>
           <url>http://${env.CI_DEPLOY_HOST}:8081/artifactory/libs-release</url>
         </pluginRepository>
