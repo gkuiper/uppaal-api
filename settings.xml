@@ -12,6 +12,11 @@
       <password>${env.CI_DEPLOY_PASSWORD}</password>
       <id>snapshots</id>
     </server>
+	<server>
+		<id>myMavenRepo</id>
+		<username>myMavenRepo</username>
+        <password>${env.MYMAVEN_PASSWORD}</password>
+	</server>
   </servers>
   <profiles>
     <profile>
@@ -26,6 +31,10 @@
 				<enabled>false</enabled>
 			</snapshots>
 		</repository>
+		<repository>
+            <id>myMavenRepo</id>
+            <url>https://mymavenrepo.com/repo/aWGy3IWFD4fBSdjUYivc/</url>
+        </repository>
         <repository>
           <snapshots>
             <enabled>false</enabled>
@@ -67,7 +76,7 @@
           <url>http://${env.CI_DEPLOY_HOST}:8081/artifactory/libs-release</url>
         </pluginRepository>
       </pluginRepositories>
-      <properties><deployUrl>http://${env.CI_DEPLOY_HOST}:8081/artifactory/libs-snapshot-local</deployUrl></properties>
+      <properties><deployUrl>https://mymavenrepo.com/repo/gBtyVhJMBtwsDVbdVI3B/</deployUrl></properties>
       <id>artifactory</id>
     </profile>
   </profiles>

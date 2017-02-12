@@ -53,7 +53,7 @@
   </dependencies>
   <distributionManagement>
     <snapshotRepository>
-        <id>snapshots</id>
+        <id>myMavenRepo</id>
         <name>f4598c7a1527-snapshots</name>
         <url>${deployUrl}</url>
     </snapshotRepository>
